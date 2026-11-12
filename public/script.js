@@ -1,67 +1,110 @@
-import { GoogleGenAI } from "@google/genai";
+const video = document.getElementById('videoElement');
+const canvas = document.getElementById('canvasElement');
+const scanBtn = document.getElementById('scanBtn');
+const resultContainer = document.getElementById('resultContainer');
+const loadingIndicator = document.getElementById('loadingIndicator');
+const resultText = document.getElementById('resultText');
 
-export default async function handler(req, res) {
-    if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method Not Allowed' });
+let currentStream = null;
+
+// 1. Inisialisasi Kamera dengan Pembersih Sesi Lama (Anti-Blank)
+async function startCamera() {
+    // Matikan stream lama jika masih nyangkut saat refresh
+    if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
     }
 
     try {
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-            return res.status(500).json({ 
-                error: 'GEMINI_API_KEY belum terpasang di Vercel Environment Variables.' 
+        currentStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false
+        });
+    } catch (err) {
+        console.warn("Beralih ke kamera default:", err);
+        try {
+            currentStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: false
             });
+        } catch (fallbackErr) {
+            alert("Kamera terkunci atau tidak diizinkan. Tutup tab ini lalu buka ulang di tab baru.");
+            return;
+        }
+    }
+
+    video.srcObject = currentStream;
+    
+    // Pastikan video diputar hanya setelah metadata siap (mencegah layar hitam)
+    video.onloadedmetadata = () => {
+        video.play().catch(e => console.warn("Autoplay tertahan:", e));
+    };
+}
+
+startCamera();
+
+// Matikan kamera dengan bersih saat halaman ditutup/di-refresh
+window.addEventListener('beforeunload', () => {
+    if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+    }
+});
+
+// 2. Event Listener Tombol Scan
+scanBtn.addEventListener('click', async () => {
+    if (!video.srcObject || video.readyState < 2) {
+        alert("Kamera masih memuat gambar, tunggu sebentar.");
+        return;
+    }
+
+    scanBtn.disabled = true;
+    resultContainer.classList.remove('d-none');
+    loadingIndicator.classList.remove('d-none');
+    resultText.innerHTML = "";
+    window.speechSynthesis.cancel(); 
+
+    const rawWidth = video.videoWidth || 640;
+    const rawHeight = video.videoHeight || 480;
+    const MAX_WIDTH = 640;
+    const scaleFactor = MAX_WIDTH / rawWidth;
+    
+    canvas.width = MAX_WIDTH;
+    canvas.height = rawHeight * scaleFactor;
+
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    const dataURL = canvas.toDataURL('image/jpeg', 0.7);
+    const base64Raw = dataURL.split(',')[1];
+
+    try {
+        const response = await fetch('/api/gemini', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageBase64: base64Raw })
+        });
+
+        const data = await response.json();
+        
+        if (!response.ok || data.error) {
+            throw new Error(data.error || `Error ${response.status}`);
         }
 
-        const { imageBase64 } = req.body;
-        if (!imageBase64) {
-            return res.status(400).json({ error: 'Data gambar kosong.' });
-        }
-
-        const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-
-        const prompt = "Anda adalah pemandu budaya Bali virtual. Identifikasi objek budaya Bali di gambar ini. Jika berkaitan dengan Dewata Nawa Sanga (seperti Canang, Kain Poleng, Bunga, Dupa, Pelinggih, dll) atau budaya spiritual Bali, jelaskan maknanya secara filosofis dalam 2 kalimat singkat yang menarik menggunakan bahasa Indonesia. Jika tidak dikenali atau bukan objek budaya, katakan dengan sopan: 'Maaf, saya belum mengenali objek budaya pada gambar ini.'";
-
-        const contents = [
-            prompt,
-            {
-                inlineData: {
-                    data: imageBase64,
-                    mimeType: "image/jpeg"
-                }
-            }
-        ];
-
-        // Daftar model berurutan: Utama -> Cadangan 1 -> Cadangan 2
-        const models = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
-        let responseText = null;
-        let lastError = null;
-
-        // Coba satu per satu sampai ada yang berhasil merespons
-        for (const modelName of models) {
-            try {
-                const response = await ai.models.generateContent({
-                    model: modelName,
-                    contents: contents
-                });
-                responseText = response.text;
-                break; // Berhasil! Keluar dari perulangan
-            } catch (err) {
-                console.warn(`Model ${modelName} sibuk/gagal, beralih ke model cadangan...`, err.message);
-                lastError = err;
-            }
-        }
-
-        if (!responseText) {
-            throw lastError || new Error("Semua server AI sedang sibuk.");
-        }
-
-        return res.status(200).json({ text: responseText });
+        loadingIndicator.classList.add('d-none');
+        resultText.innerHTML = data.text;
+        speakText(data.text);
 
     } catch (error) {
-        console.error("Gemini API Error:", error);
-        return res.status(500).json({ 
-            error: 'Server AI sedang padat, silakan tekan Scan sekali lagi.' 
-        });
+        loadingIndicator.classList.add('d-none');
+        resultText.innerHTML = "Gagal memproses: " + error.message;
+    } finally {
+        scanBtn.disabled = false;
     }
+});
+
+function speakText(text) {
+    if (!('speechSynthesis' in window)) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'id-ID';
+    utterance.rate = 1.0;
+    window.speechSynthesis.speak(utterance);
 }
