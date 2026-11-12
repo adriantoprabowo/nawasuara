@@ -9,7 +9,7 @@ const resultText = document.getElementById('resultText');
 async function startCamera() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment' } // Prioritas kamera belakang
+            video: { facingMode: 'environment' }
         });
         video.srcObject = stream;
     } catch (err) {
@@ -22,28 +22,40 @@ startCamera();
 
 // 2. Event Listener Tombol Scan
 scanBtn.addEventListener('click', async () => {
+    // Validasi: Pastikan kamera sudah siap dan memiliki gambar
+    if (!video.videoWidth || !video.videoHeight) {
+        alert("Kamera belum siap, tunggu 1-2 detik lalu coba lagi.");
+        return;
+    }
+
     // UI Loading State
     scanBtn.disabled = true;
     resultContainer.classList.remove('d-none');
     loadingIndicator.classList.remove('d-none');
     resultText.innerHTML = "";
     
-    // Hentikan suara jika sedang berbicara
     window.speechSynthesis.cancel(); 
 
-    // Ambil ukuran asli video
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // PERBAIKAN: Resize gambar ke lebar maksimal 640px agar ringan & lolos limit Vercel
+    const MAX_WIDTH = 640;
+    const scaleFactor = MAX_WIDTH / video.videoWidth;
+    canvas.width = MAX_WIDTH;
+    canvas.height = video.videoHeight * scaleFactor;
+
     const ctx = canvas.getContext('2d');
-    
-    // Jepret frame saat ini ke canvas
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // Konversi gambar ke format Base64 JPEG (kualitas 0.8)
-    const dataURL = canvas.toDataURL('image/jpeg', 0.8);
-    
-    // Hilangkan prefix "data:image/jpeg;base64," karena backend hanya butuh raw datanya
+    // Kompresi JPEG kualitas 0.7 (cukup tajam untuk AI, ukuran hanya ~40KB)
+    const dataURL = canvas.toDataURL('image/jpeg', 0.7);
     const base64Raw = dataURL.split(',')[1];
+
+    // Validasi tambahan jika base64 masih kosong
+    if (!base64Raw) {
+        loadingIndicator.classList.add('d-none');
+        resultText.innerHTML = "Gagal menangkap gambar dari kamera.";
+        scanBtn.disabled = false;
+        return;
+    }
 
     try {
         // 3. Kirim ke Serverless Function (Backend Vercel)
@@ -55,7 +67,9 @@ scanBtn.addEventListener('click', async () => {
 
         const data = await response.json();
         
-        if (data.error) throw new Error(data.error);
+        if (!response.ok || data.error) {
+            throw new Error(data.error || `Error ${response.status}`);
+        }
 
         // Tampilkan teks di layar
         loadingIndicator.classList.add('d-none');
@@ -66,8 +80,8 @@ scanBtn.addEventListener('click', async () => {
 
     } catch (error) {
         loadingIndicator.classList.add('d-none');
-        resultText.innerHTML = "Gagal memproses gambar. Coba lagi.";
-        console.error(error);
+        resultText.innerHTML = "Gagal memproses: " + error.message;
+        console.error("Detail Error:", error);
     } finally {
         scanBtn.disabled = false;
     }
@@ -78,8 +92,8 @@ function speakText(text) {
     if (!('speechSynthesis' in window)) return;
     
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'id-ID'; // Logat Indonesia
-    utterance.rate = 1.0; // Kecepatan normal
+    utterance.lang = 'id-ID';
+    utterance.rate = 1.0;
     utterance.pitch = 1.0; 
     
     window.speechSynthesis.speak(utterance);
