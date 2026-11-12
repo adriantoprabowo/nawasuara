@@ -1,100 +1,67 @@
-const video = document.getElementById('videoElement');
-const canvas = document.getElementById('canvasElement');
-const scanBtn = document.getElementById('scanBtn');
-const resultContainer = document.getElementById('resultContainer');
-const loadingIndicator = document.getElementById('loadingIndicator');
-const resultText = document.getElementById('resultText');
+import { GoogleGenAI } from "@google/genai";
 
-// 1. Inisialisasi Kamera (Prioritas kamera belakang HP, cadangan kamera laptop)
-async function startCamera() {
+export default async function handler(req, res) {
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method Not Allowed' });
+    }
+
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment' },
-            audio: false
-        });
-        video.srcObject = stream;
-        await video.play();
-    } catch (err) {
-        try {
-            const fallbackStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: false
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ 
+                error: 'GEMINI_API_KEY belum terpasang di Vercel Environment Variables.' 
             });
-            video.srcObject = fallbackStream;
-            await video.play();
-        } catch (fallbackErr) {
-            alert("Kamera gagal terbuka. Pastikan izin kamera di browser sudah 'Allow'.");
-        }
-    }
-}
-
-startCamera();
-
-// 2. Event Listener Tombol Scan
-scanBtn.addEventListener('click', async () => {
-    if (!video.srcObject) {
-        alert("Kamera belum aktif. Refresh halaman dan izinkan akses kamera.");
-        return;
-    }
-
-    scanBtn.disabled = true;
-    resultContainer.classList.remove('d-none');
-    loadingIndicator.classList.remove('d-none');
-    resultText.innerHTML = "";
-    window.speechSynthesis.cancel(); 
-
-    // Resize gambar maksimal 640px agar ringan
-    const rawWidth = video.videoWidth || 640;
-    const rawHeight = video.videoHeight || 480;
-    const MAX_WIDTH = 640;
-    const scaleFactor = MAX_WIDTH / rawWidth;
-    
-    canvas.width = MAX_WIDTH;
-    canvas.height = rawHeight * scaleFactor;
-
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
-    const dataURL = canvas.toDataURL('image/jpeg', 0.7);
-    const base64Raw = dataURL.split(',')[1];
-
-    try {
-        // 3. Kirim gambar ke api/gemini.js
-        const response = await fetch('/api/gemini', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ imageBase64: base64Raw })
-        });
-
-        const data = await response.json();
-        
-        if (!response.ok || data.error) {
-            throw new Error(data.error || `Error ${response.status}`);
         }
 
-        // Tampilkan teks jawaban AI
-        loadingIndicator.classList.add('d-none');
-        resultText.innerHTML = data.text;
+        const { imageBase64 } = req.body;
+        if (!imageBase64) {
+            return res.status(400).json({ error: 'Data gambar kosong.' });
+        }
 
-        // 4. Bunyikan Suara (Text-to-Speech)
-        speakText(data.text);
+        const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+
+        const prompt = "Anda adalah pemandu budaya Bali virtual. Identifikasi objek budaya Bali di gambar ini. Jika berkaitan dengan Dewata Nawa Sanga (seperti Canang, Kain Poleng, Bunga, Dupa, Pelinggih, dll) atau budaya spiritual Bali, jelaskan maknanya secara filosofis dalam 2 kalimat singkat yang menarik menggunakan bahasa Indonesia. Jika tidak dikenali atau bukan objek budaya, katakan dengan sopan: 'Maaf, saya belum mengenali objek budaya pada gambar ini.'";
+
+        const contents = [
+            prompt,
+            {
+                inlineData: {
+                    data: imageBase64,
+                    mimeType: "image/jpeg"
+                }
+            }
+        ];
+
+        // Daftar model berurutan: Utama -> Cadangan 1 -> Cadangan 2
+        const models = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
+        let responseText = null;
+        let lastError = null;
+
+        // Coba satu per satu sampai ada yang berhasil merespons
+        for (const modelName of models) {
+            try {
+                const response = await ai.models.generateContent({
+                    model: modelName,
+                    contents: contents
+                });
+                responseText = response.text;
+                break; // Berhasil! Keluar dari perulangan
+            } catch (err) {
+                console.warn(`Model ${modelName} sibuk/gagal, beralih ke model cadangan...`, err.message);
+                lastError = err;
+            }
+        }
+
+        if (!responseText) {
+            throw lastError || new Error("Semua server AI sedang sibuk.");
+        }
+
+        return res.status(200).json({ text: responseText });
 
     } catch (error) {
-        loadingIndicator.classList.add('d-none');
-        resultText.innerHTML = "Gagal memproses: " + error.message;
-    } finally {
-        scanBtn.disabled = false;
+        console.error("Gemini API Error:", error);
+        return res.status(500).json({ 
+            error: 'Server AI sedang padat, silakan tekan Scan sekali lagi.' 
+        });
     }
-});
-
-// 5. Fungsi Menyuarakan Teks (Mulut AI)
-function speakText(text) {
-    if (!('speechSynthesis' in window)) return;
-    
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'id-ID';
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0; 
-    
-    window.speechSynthesis.speak(utterance);
 }
