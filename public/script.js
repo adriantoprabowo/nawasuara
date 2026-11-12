@@ -5,16 +5,30 @@ const resultContainer = document.getElementById('resultContainer');
 const loadingIndicator = document.getElementById('loadingIndicator');
 const resultText = document.getElementById('resultText');
 
-// 1. Inisialisasi Kamera Belakang (Environment)
+// 1. Inisialisasi Kamera dengan Fallback & Force Play
 async function startCamera() {
     try {
+        // Coba kamera belakang dulu (untuk HP)
         const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment' }
+            video: { facingMode: 'environment' },
+            audio: false
         });
         video.srcObject = stream;
+        await video.play(); // Paksa video langsung berputar
     } catch (err) {
-        console.error("Kamera gagal diakses:", err);
-        alert("Mohon izinkan akses kamera untuk menggunakan aplikasi ini.");
+        console.warn("Kamera belakang tidak tersedia, beralih ke kamera default:", err);
+        try {
+            // Cadangan: Gunakan kamera apa saja yang tersedia (cocok untuk Laptop)
+            const fallbackStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: false
+            });
+            video.srcObject = fallbackStream;
+            await video.play();
+        } catch (fallbackErr) {
+            console.error("Semua kamera gagal diakses:", fallbackErr);
+            alert("Kamera gagal terbuka. Pastikan izin kamera di browser sudah 'Allow' dan tidak dipakai aplikasi lain.");
+        }
     }
 }
 
@@ -22,9 +36,9 @@ startCamera();
 
 // 2. Event Listener Tombol Scan
 scanBtn.addEventListener('click', async () => {
-    // Validasi: Pastikan kamera sudah siap dan memiliki gambar
-    if (!video.videoWidth || !video.videoHeight) {
-        alert("Kamera belum siap, tunggu 1-2 detik lalu coba lagi.");
+    // Cek apakah stream kamera sudah aktif
+    if (!video.srcObject) {
+        alert("Kamera belum aktif. Refresh halaman dan izinkan akses kamera.");
         return;
     }
 
@@ -36,23 +50,26 @@ scanBtn.addEventListener('click', async () => {
     
     window.speechSynthesis.cancel(); 
 
-    // PERBAIKAN: Resize gambar ke lebar maksimal 640px agar ringan & lolos limit Vercel
+    // Gunakan ukuran video asli, atau fallback ke 640x480 jika browser belum melaporkan dimensinya
+    const rawWidth = video.videoWidth || 640;
+    const rawHeight = video.videoHeight || 480;
+
+    // Resize gambar ke lebar maksimal 640px agar ringan & lolos limit Vercel
     const MAX_WIDTH = 640;
-    const scaleFactor = MAX_WIDTH / video.videoWidth;
+    const scaleFactor = MAX_WIDTH / rawWidth;
     canvas.width = MAX_WIDTH;
-    canvas.height = video.videoHeight * scaleFactor;
+    canvas.height = rawHeight * scaleFactor;
 
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // Kompresi JPEG kualitas 0.7 (cukup tajam untuk AI, ukuran hanya ~40KB)
+    // Kompresi JPEG kualitas 0.7
     const dataURL = canvas.toDataURL('image/jpeg', 0.7);
     const base64Raw = dataURL.split(',')[1];
 
-    // Validasi tambahan jika base64 masih kosong
-    if (!base64Raw) {
+    if (!base64Raw || base64Raw.length < 100) {
         loadingIndicator.classList.add('d-none');
-        resultText.innerHTML = "Gagal menangkap gambar dari kamera.";
+        resultText.innerHTML = "Gambar kosong. Pastikan layar kamera tidak hitam.";
         scanBtn.disabled = false;
         return;
     }
