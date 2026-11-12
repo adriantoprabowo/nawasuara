@@ -5,20 +5,17 @@ const resultContainer = document.getElementById('resultContainer');
 const loadingIndicator = document.getElementById('loadingIndicator');
 const resultText = document.getElementById('resultText');
 
-// 1. Inisialisasi Kamera dengan Fallback & Force Play
+// 1. Inisialisasi Kamera (Prioritas kamera belakang HP, cadangan kamera laptop)
 async function startCamera() {
     try {
-        // Coba kamera belakang dulu (untuk HP)
         const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'environment' },
             audio: false
         });
         video.srcObject = stream;
-        await video.play(); // Paksa video langsung berputar
+        await video.play();
     } catch (err) {
-        console.warn("Kamera belakang tidak tersedia, beralih ke kamera default:", err);
         try {
-            // Cadangan: Gunakan kamera apa saja yang tersedia (cocok untuk Laptop)
             const fallbackStream = await navigator.mediaDevices.getUserMedia({
                 video: true,
                 audio: false
@@ -26,8 +23,7 @@ async function startCamera() {
             video.srcObject = fallbackStream;
             await video.play();
         } catch (fallbackErr) {
-            console.error("Semua kamera gagal diakses:", fallbackErr);
-            alert("Kamera gagal terbuka. Pastikan izin kamera di browser sudah 'Allow' dan tidak dipakai aplikasi lain.");
+            alert("Kamera gagal terbuka. Pastikan izin kamera di browser sudah 'Allow'.");
         }
     }
 }
@@ -36,46 +32,34 @@ startCamera();
 
 // 2. Event Listener Tombol Scan
 scanBtn.addEventListener('click', async () => {
-    // Cek apakah stream kamera sudah aktif
     if (!video.srcObject) {
         alert("Kamera belum aktif. Refresh halaman dan izinkan akses kamera.");
         return;
     }
 
-    // UI Loading State
     scanBtn.disabled = true;
     resultContainer.classList.remove('d-none');
     loadingIndicator.classList.remove('d-none');
     resultText.innerHTML = "";
-    
     window.speechSynthesis.cancel(); 
 
-    // Gunakan ukuran video asli, atau fallback ke 640x480 jika browser belum melaporkan dimensinya
+    // Resize gambar maksimal 640px agar ringan
     const rawWidth = video.videoWidth || 640;
     const rawHeight = video.videoHeight || 480;
-
-    // Resize gambar ke lebar maksimal 640px agar ringan & lolos limit Vercel
     const MAX_WIDTH = 640;
     const scaleFactor = MAX_WIDTH / rawWidth;
+    
     canvas.width = MAX_WIDTH;
     canvas.height = rawHeight * scaleFactor;
 
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // Kompresi JPEG kualitas 0.7
     const dataURL = canvas.toDataURL('image/jpeg', 0.7);
     const base64Raw = dataURL.split(',')[1];
 
-    if (!base64Raw || base64Raw.length < 100) {
-        loadingIndicator.classList.add('d-none');
-        resultText.innerHTML = "Gambar kosong. Pastikan layar kamera tidak hitam.";
-        scanBtn.disabled = false;
-        return;
-    }
-
     try {
-        // 3. Kirim ke Serverless Function (Backend Vercel)
+        // 3. Kirim gambar ke api/gemini.js
         const response = await fetch('/api/gemini', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -88,23 +72,22 @@ scanBtn.addEventListener('click', async () => {
             throw new Error(data.error || `Error ${response.status}`);
         }
 
-        // Tampilkan teks di layar
+        // Tampilkan teks jawaban AI
         loadingIndicator.classList.add('d-none');
         resultText.innerHTML = data.text;
 
-        // 4. Mulai Text-to-Speech (Mulut AI)
+        // 4. Bunyikan Suara (Text-to-Speech)
         speakText(data.text);
 
     } catch (error) {
         loadingIndicator.classList.add('d-none');
         resultText.innerHTML = "Gagal memproses: " + error.message;
-        console.error("Detail Error:", error);
     } finally {
         scanBtn.disabled = false;
     }
 });
 
-// Fungsi untuk menyuarakan teks (Web Speech API)
+// 5. Fungsi Menyuarakan Teks (Mulut AI)
 function speakText(text) {
     if (!('speechSynthesis' in window)) return;
     
