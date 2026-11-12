@@ -1,45 +1,46 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+import { GoogleGenAI } from "@google/genai";
 
 export default async function handler(req, res) {
-    // Hanya izinkan method POST
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
     try {
-        const { imageBase64 } = req.body;
-        
-        if (!imageBase64) {
-            return res.status(400).json({ error: 'Gambar tidak ditemukan' });
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ 
+                error: 'GEMINI_API_KEY belum terpasang di Vercel Environment Variables.' 
+            });
         }
 
-        // Panggil key dari Vercel Environment Variables
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const { imageBase64 } = req.body;
+        if (!imageBase64) {
+            return res.status(400).json({ error: 'Data gambar kosong.' });
+        }
 
-        // Prompt Sistem yang ketat
-        const prompt = "Anda adalah pemandu budaya Bali virtual. Identifikasi objek budaya Bali di gambar ini. Jika berkaitan dengan Dewata Nawa Sanga (seperti Canang, Kain Poleng, Bunga, dll) atau budaya spiritual Bali, jelaskan maknanya secara filosofis dalam 2 kalimat singkat yang menarik menggunakan bahasa Indonesia. Jika tidak dikenali atau bukan objek budaya, katakan dengan sopan: 'Maaf, saya belum mengenali objek budaya pada gambar ini.'";
+        const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
 
-        // Format data gambar untuk Gemini
-        const imageParts = [
-            {
-                inlineData: {
-                    data: imageBase64,
-                    mimeType: "image/jpeg"
+        const prompt = "Anda adalah pemandu budaya Bali virtual. Identifikasi objek budaya Bali di gambar ini. Jika berkaitan dengan Dewata Nawa Sanga (seperti Canang, Kain Poleng, Bunga, Dupa, Pelinggih, dll) atau budaya spiritual Bali, jelaskan maknanya secara filosofis dalam 2 kalimat singkat yang menarik menggunakan bahasa Indonesia. Jika tidak dikenali atau bukan objek budaya, katakan dengan sopan: 'Maaf, saya belum mengenali objek budaya pada gambar ini.'";
+
+        const response = await ai.models.generateContent({
+            model: "gemini-3.8-flash",
+            contents: [
+                prompt,
+                {
+                    inlineData: {
+                        data: imageBase64,
+                        mimeType: "image/jpeg"
+                    }
                 }
-            }
-        ];
+            ]
+        });
 
-        // Eksekusi ke Gemini Multimodal
-        const result = await model.generateContent([prompt, ...imageParts]);
-        const response = await result.response;
-        const text = response.text();
-
-        // Kembalikan teks ke frontend
-        res.status(200).json({ text: text });
+        return res.status(200).json({ text: response.text });
 
     } catch (error) {
         console.error("Gemini API Error:", error);
-        res.status(500).json({ error: 'Terjadi kesalahan pada server AI.' });
+        return res.status(500).json({ 
+            error: 'Error Google AI: ' + (error.message || 'Unknown error') 
+        });
     }
 }
