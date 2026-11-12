@@ -36,7 +36,8 @@ export default async function handler(req, res) {
         ];
 
         // Gunakan urutan model yang paling stabil kapasitas servernya
-        const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.8-flash"];
+       // Ganti baris const models = [...] menjadi:
+        const models = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-2.5-flash-lite"];
         let responseText = null;
         let lastError = null;
 
