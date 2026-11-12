@@ -1,5 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 
+// Fungsi jeda singkat (delay) sebelum mencoba ulang
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method Not Allowed' });
@@ -9,7 +12,7 @@ export default async function handler(req, res) {
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
             return res.status(500).json({ 
-                error: 'GEMINI_API_KEY belum terpasang di Vercel Environment Variables.' 
+                error: 'GEMINI_API_KEY belum terpasang di Vercel.' 
             });
         }
 
@@ -22,25 +25,46 @@ export default async function handler(req, res) {
 
         const prompt = "Anda adalah pemandu budaya Bali virtual. Identifikasi objek budaya Bali di gambar ini. Jika berkaitan dengan Dewata Nawa Sanga (seperti Canang, Kain Poleng, Bunga, Dupa, Pelinggih, dll) atau budaya spiritual Bali, jelaskan maknanya secara filosofis dalam 2 kalimat singkat yang menarik menggunakan bahasa Indonesia. Jika tidak dikenali atau bukan objek budaya, katakan dengan sopan: 'Maaf, saya belum mengenali objek budaya pada gambar ini.'";
 
-        const response = await ai.models.generateContent({
-            model: "gemini-3.8-flash",
-            contents: [
-                prompt,
-                {
-                    inlineData: {
-                        data: imageBase64,
-                        mimeType: "image/jpeg"
-                    }
+        const contents = [
+            prompt,
+            {
+                inlineData: {
+                    data: imageBase64,
+                    mimeType: "image/jpeg"
                 }
-            ]
-        });
+            }
+        ];
 
-        return res.status(200).json({ text: response.text });
+        // Gunakan urutan model yang paling stabil kapasitas servernya
+        const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.8-flash"];
+        let responseText = null;
+        let lastError = null;
+
+        for (const modelName of models) {
+            try {
+                const response = await ai.models.generateContent({
+                    model: modelName,
+                    contents: contents
+                });
+                responseText = response.text;
+                break; 
+            } catch (err) {
+                console.warn(`Model ${modelName} gagal (${err.status || err.message}), mencoba cadangan...`);
+                lastError = err;
+                await delay(600); // Beri jeda 0.6 detik sebelum pindah server
+            }
+        }
+
+        if (!responseText) {
+            throw lastError || new Error("Semua server AI sedang sibuk.");
+        }
+
+        return res.status(200).json({ text: responseText });
 
     } catch (error) {
         console.error("Gemini API Error:", error);
         return res.status(500).json({ 
-            error: 'Error Google AI: ' + (error.message || 'Unknown error') 
+            error: 'Server AI Google sedang sibuk (503). Tunggu 3 detik lalu tekan Scan lagi.' 
         });
     }
 }
